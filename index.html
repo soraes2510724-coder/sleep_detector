@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>졸음 예방 및 자세 감지 앱</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            text-align: center;
+            background-color: #f4f6f9;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 { color: #333; }
+        #webcam-container {
+            margin: 20px auto;
+            border: 4px solid #333;
+            border-radius: 10px;
+            width: 400px;
+            height: 400px;
+            background-color: #ddd;
+            overflow: hidden;
+        }
+        #label-container {
+            font-size: 24px;
+            font-weight: bold;
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 5px;
+            display: inline-block;
+        }
+        .normal { color: #2ecc71; background-color: #e8f8f5; }
+        .sleeping { color: #e74c3c; background-color: #fadbd8; }
+        
+        /* 알람음 시작 버튼 */
+        #start-btn {
+            padding: 12px 24px;
+            font-size: 16px;
+            font-weight: bold;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+        #start-btn:hover { background-color: #2980b9; }
+    </style>
+</head>
+<body>
+
+    <h1>😴 졸음 감지 시스템</h1>
+    <p>웹캠을 켜고 시작 버튼을 누르면 감지가 시작됩니다.</p>
+    <button id="start-btn" onclick="init()">시작하기 (웹캠/오디오 권한 허용)</button>
+    
+    <div id="webcam-container"></div>
+    <div id="label-container">대기 중...</div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+
+    <script type="text/javascript">
+        // 1. Teachable Machine 모델 URL 설정 (전달해주신 링크 적용)
+        const URL = "https://teachablemachine.withgoogle.com/models/KgK8J7Kc2/";
+
+        let model, webcam, labelContainer, maxPredictions;
+        let isAudioContextStarted = false;
+
+        // 웹 오디오 API를 이용해 경고음(Beep) 생성 함수
+        function playAlertSound() {
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            oscillator.type = 'sine'; // 소리 종류 (sine, square, sawtooth, triangle)
+            oscillator.frequency.setValueAtTime(600, audioCtx.currentTime); // 주파수 (높을수록 높은 음)
+            gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime); // 볼륨 크기
+
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + 0.5); // 0.5초 동안 재생
+        }
+
+        // 앱 초기화 및 시작
+        async function init() {
+            document.getElementById("start-btn").style.display = "none";
+            document.getElementById("label-container").innerHTML = "모델 로딩 중...";
+
+            const modelURL = URL + "model.json";
+            const metadataURL = URL + "metadata.json";
+
+            // 모델 로드
+            model = await tmImage.load(modelURL, metadataURL);
+            maxPredictions = model.getTotalClasses();
+
+            // 웹캠 설정
+            const flip = true; // 좌우 반전 여부
+            webcam = new tmImage.Webcam(400, 400, flip); 
+            await webcam.setup(); // 웹캠 권한 요청
+            await webcam.play();
+            window.requestAnimationFrame(loop);
+
+            // DOM에 웹캠 화면 추가
+            document.getElementById("webcam-container").appendChild(webcam.canvas);
+            labelContainer = document.getElementById("label-container");
+        }
+
+        // 반복 실행 루프
+        async function loop() {
+            webcam.update(); // 웹캠 프레임 업데이트
+            await predict();
+            window.requestAnimationFrame(loop);
+        }
+
+        // 지연 처리를 위한 플래그 (소리가 너무 연속으로 나지 않게 방지)
+        let isPlaying = false; 
+
+        // 예측 및 판단
+        async function predict() {
+            const prediction = await model.predict(webcam.canvas);
+            
+            // Teachable Machine에 등록된 클래스 이름을 확인하세요.
+            // 보통 첫 번째가 정상(Normal) 혹은 엎드림(Sleeping)일 것입니다.
+            // 아래는 확률이 가장 높은 클래스를 찾아내는 과정입니다.
+            
+            let highestClass = "";
+            let highestProbability = 0;
+
+            for (let i = 0; i < maxPredictions; i++) {
+                if (prediction[i].probability > highestProbability) {
+                    highestProbability = prediction[i].probability;
+                    highestClass = prediction[i].className;
+                }
+            }
+
+            // ⚠️ [주의] 모델의 정확한 클래스 명칭(레이블)으로 매칭해야 합니다.
+            // 만약 작동하지 않는다면 모델 학습 시 입력한 영어/한글 이름과 일치하는지 확인하세요.
+            // 여기서는 임의로 'Sleeping', '엎드림', '자는 상태' 등을 포괄하도록 설정했습니다.
+            if (highestClass.includes("자") || highestClass.toLowerCase().includes("sleep") || highestClass.includes("엎드")) {
+                
+                // 확률이 85% 이상일 때만 경고음 발생 (오작동 방지)
+                if (highestProbability > 0.85) {
+                    labelContainer.innerHTML = `🚨 엎드림 감지! (${(highestProbability * 100).toFixed(0)}%)`;
+                    labelContainer.className = "sleeping";
+                    
+                    if (!isPlaying) {
+                        isPlaying = true;
+                        playAlertSound();
+                        // 소리가 한 번 나면 2초간 쉬었다가 다시 감지 (귀 아픔 방지)
+                        setTimeout(() => { isPlaying = false; }, 2000); 
+                    }
+                }
+            } else {
+                labelContainer.innerHTML = `✅ 정상 상태 (${(highestProbability * 100).toFixed(0)}%)`;
+                labelContainer.className = "normal";
+            }
+        }
+    </script>
+</body>
+</html>
