@@ -76,20 +76,19 @@
 
         let model, webcam, labelContainer, maxPredictions;
         let audioCtx = null; // 오디오 컨텍스트 전역 관리
-        let isPlaying = false; 
+        let alertInterval = null; // 반복 재생을 제어할 타이머 변수
 
-        // 브라우저 호환성을 고려한 오디오 컨텍스트 초기화 (클릭 이벤트 내에서 실행 필수)
+        // 브라우저 호환성을 고려한 오디오 컨텍스트 초기화
         function initAudio() {
             if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             }
-            // 브라우저 정책상 정지 상태(suspended)로 생성될 수 있으므로 재개 처리
             if (audioCtx.state === 'suspended') {
                 audioCtx.resume();
             }
         }
 
-        // 경고음(Beep) 생성 함수
+        // 경고음(Beep) 생성 함수 (0.5초 동안 소리 재생)
         function playAlertSound() {
             if (!audioCtx) return;
 
@@ -99,17 +98,33 @@
             oscillator.connect(gainNode);
             gainNode.connect(audioCtx.destination);
 
-            oscillator.type = 'sine'; // 소리 종류
-            oscillator.frequency.setValueAtTime(600, audioCtx.currentTime); // 주파수
-            gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime); // 볼륨
+            oscillator.type = 'sine'; 
+            oscillator.frequency.setValueAtTime(600, audioCtx.currentTime); 
+            gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime); 
 
             oscillator.start();
-            oscillator.stop(audioCtx.currentTime + 0.5); // 0.5초 동안 재생
+            oscillator.stop(audioCtx.currentTime + 0.5); 
+        }
+
+        // 반복 경고음 시작 함수
+        function startAlarm() {
+            if (alertInterval === null) {
+                // 최초 1회 즉시 실행 후, 0.6초(600ms) 간격으로 반복하여 소리 재생 (소리 길이 0.5초보다 약간 길게 잡음)
+                playAlertSound();
+                alertInterval = setInterval(playAlertSound, 600);
+            }
+        }
+
+        // 경고음 정지 함수
+        function stopAlarm() {
+            if (alertInterval !== null) {
+                clearInterval(alertInterval);
+                alertInterval = null;
+            }
         }
 
         // 앱 초기화 및 시작
         async function init() {
-            // 1. 사용자 클릭 직후 오디오 컨텍스트 활성화 (브라우저 차단 우회)
             initAudio();
 
             document.getElementById("start-btn").style.display = "none";
@@ -120,16 +135,13 @@
                 const modelURL = URL + "model.json";
                 const metadataURL = URL + "metadata.json";
 
-                // 모델 로드
                 model = await tmImage.load(modelURL, metadataURL);
                 maxPredictions = model.getTotalClasses();
 
-                // 웹캠 설정 및 권한 요청
                 const flip = true; 
                 webcam = new tmImage.Webcam(400, 400, flip); 
-                await webcam.setup(); // 웹캠 권한 요청
+                await webcam.setup(); 
 
-                // 모바일/일부 Firefox/Safari 등 대응을 위해 비디오 요소 속성 강제 추가
                 if (webcam.webcam) {
                     webcam.webcam.setAttribute('playsinline', true);
                     webcam.webcam.setAttribute('muted', true);
@@ -138,9 +150,8 @@
                 await webcam.play();
                 window.requestAnimationFrame(loop);
 
-                // DOM에 웹캠 화면 추가
                 const container = document.getElementById("webcam-container");
-                container.innerHTML = ""; // 대기 안내 초기화 후 캔버스 삽입
+                container.innerHTML = ""; 
                 container.appendChild(webcam.canvas);
                 
                 labelContainer.innerHTML = "감지 중...";
@@ -151,13 +162,13 @@
                 labelContainer.innerHTML = "⚠️ 카메라/마이크 권한을 허용했는지 확인해주세요.";
                 labelContainer.style.backgroundColor = "#fadbd8";
                 labelContainer.style.color = "#e74c3c";
-                document.getElementById("start-btn").style.display = "inline-block"; // 버튼 재노출
+                document.getElementById("start-btn").style.display = "inline-block"; 
             }
         }
 
         // 반복 실행 루프
         async function loop() {
-            webcam.update(); // 웹캠 프레임 업데이트
+            webcam.update(); 
             await predict();
             window.requestAnimationFrame(loop);
         }
@@ -178,27 +189,22 @@
                 }
             }
 
-            // 조건 비교 (한글/영어 대소문자 등 매칭 범위 확대)
             const isSleeping = highestClass.includes("자") || 
                                highestClass.toLowerCase().includes("sleep") || 
                                highestClass.includes("엎드");
 
-            if (isSleeping) {
-                // 확률이 85% 이상일 때만 경고음 발생
-                if (highestProbability > 0.85) {
-                    labelContainer.innerHTML = `🚨 엎드림 감지! (${(highestProbability * 100).toFixed(0)}%)`;
-                    labelContainer.className = "sleeping";
-                    
-                    if (!isPlaying) {
-                        isPlaying = true;
-                        playAlertSound();
-                        // 2초 딜레이
-                        setTimeout(() => { isPlaying = false; }, 2000); 
-                    }
-                }
+            if (isSleeping && highestProbability > 0.85) {
+                labelContainer.innerHTML = `🚨 엎드림 감지! (${(highestProbability * 100).toFixed(0)}%)`;
+                labelContainer.className = "sleeping";
+                
+                // 누워있는 동안 경고음 무한 반복 시작
+                startAlarm();
             } else {
                 labelContainer.innerHTML = `✅ 정상 상태 (${(highestProbability * 100).toFixed(0)}%)`;
                 labelContainer.className = "normal";
+                
+                // 정상 상태가 되면 즉시 경고음 정지
+                stopAlarm();
             }
         }
     </script>
