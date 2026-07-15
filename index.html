@@ -16,33 +16,25 @@
         #webcam-container {
             margin: 20px auto;
             border: 4px solid #333;
-            border-radius: 50%;
+            border-radius: 10px;
             width: 400px;
             height: 400px;
             background-color: #ddd;
             overflow: hidden;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        #webcam-container canvas {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
+            border-radius: 50%;
         }
         #label-container {
             font-size: 24px;
             font-weight: bold;
             margin-top: 20px;
-            padding: 10px 20px;
+            padding: 10px;
             border-radius: 5px;
             display: inline-block;
-            transition: all 0.3s ease;
         }
         .normal { color: #2ecc71; background-color: #e8f8f5; }
         .sleeping { color: #e74c3c; background-color: #fadbd8; }
-        .error { color: #c0392b; background-color: #fadbd8; border: 1px solid #e74c3c; }
         
+        /* 알람음 시작 버튼 */
         #start-btn {
             padding: 12px 24px;
             font-size: 16px;
@@ -70,122 +62,70 @@
     <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
 
     <script type="text/javascript">
-        // Teachable Machine 모델 URL 설정
+        // 1. Teachable Machine 모델 URL 설정 (전달해주신 링크 적용)
         const URL = "https://teachablemachine.withgoogle.com/models/KgK8J7Kc2/";
 
         let model, webcam, labelContainer, maxPredictions;
-        let audioCtx = null;
-        let isPlaying = false; 
-        let animationFrameId = null;
+        let isAudioContextStarted = false;
 
-        // 크로미움 브라우저 보안 환경 체크
-        function checkSecureContext() {
-            if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-                alert("⚠️ 크로미움/브레이브 브라우저 정책상 보안 연결(HTTPS) 또는 localhost 주소에서만 웹캠 실행이 가능합니다.");
-                return false;
-            }
-            return true;
-        }
-
-        // 오디오 컨텍스트 초기화 (사용자 클릭 직후 실행하여 자동재생 정책 우회)
-        function initAudio() {
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            }
-            if (audioCtx.state === 'suspended') {
-                audioCtx.resume();
-            }
-        }
-
-        // 경고음 발생 함수
+        // 웹 오디오 API를 이용해 경고음(Beep) 생성 함수
         function playAlertSound() {
-            if (!audioCtx) return;
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             const oscillator = audioCtx.createOscillator();
             const gainNode = audioCtx.createGain();
-            
+
             oscillator.connect(gainNode);
             gainNode.connect(audioCtx.destination);
-            
-            oscillator.type = 'sine';
-            oscillator.frequency.setValueAtTime(600, audioCtx.currentTime);
-            gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
-            
+
+            oscillator.type = 'sine'; // 소리 종류 (sine, square, sawtooth, triangle)
+            oscillator.frequency.setValueAtTime(600, audioCtx.currentTime); // 주파수 (높을수록 높은 음)
+            gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime); // 볼륨 크기
+
             oscillator.start();
-            oscillator.stop(audioCtx.currentTime + 0.5); // 0.5초 동안 비프음 재생
+            oscillator.stop(audioCtx.currentTime + 0.5); // 0.5초 동안 재생
         }
 
-        // 시스템 시작
+        // 앱 초기화 및 시작
         async function init() {
-            if (!checkSecureContext()) return;
-            initAudio(); // 오디오 깨우기
-
             document.getElementById("start-btn").style.display = "none";
+            document.getElementById("label-container").innerHTML = "모델 로딩 중...";
+
+            const modelURL = URL + "model.json";
+            const metadataURL = URL + "metadata.json";
+
+            // 모델 로드
+            model = await tmImage.load(modelURL, metadataURL);
+            maxPredictions = model.getTotalClasses();
+
+            // 웹캠 설정
+            const flip = true; // 좌우 반전 여부
+            webcam = new tmImage.Webcam(400, 400, flip); 
+            await webcam.setup(); // 웹캠 권한 요청
+            await webcam.play();
+            window.requestAnimationFrame(loop);
+
+            // DOM에 웹캠 화면 추가
+            document.getElementById("webcam-container").appendChild(webcam.canvas);
             labelContainer = document.getElementById("label-container");
-            labelContainer.innerHTML = "모델 및 카메라 로딩 중...";
-            labelContainer.className = "";
-
-            try {
-                // 기존 재생 스트림 및 애니메이션 프레임 정리
-                if (animationFrameId) cancelAnimationFrame(animationFrameId);
-                if (webcam && webcam.stream) {
-                    webcam.stream.getTracks().forEach(track => track.stop());
-                }
-
-                const modelURL = URL + "model.json";
-                const metadataURL = URL + "metadata.json";
-
-                // 1. 모델 로드
-                model = await tmImage.load(modelURL, metadataURL);
-                maxPredictions = model.getTotalClasses();
-
-                // 2. 웹캠 생성 및 설정 (데스크톱 단일 웹캠 에러 방지를 위해 옵션 최소화)
-                const flip = true;
-                webcam = new tmImage.Webcam(400, 400, flip);
-                
-                // facingMode 조건 없이 기본 시스템 카메라 호출하여 에러 방지
-                await webcam.setup(); 
-
-                // HTML5 비디오 표준 호환성 태그 강제 삽입
-                if (webcam.webcam) {
-                    webcam.webcam.setAttribute('playsinline', 'true');
-                    webcam.webcam.setAttribute('muted', 'true');
-                    webcam.webcam.muted = true;
-                }
-
-                await webcam.play();
-                
-                // 3. 감지 루프 실행
-                animationFrameId = window.requestAnimationFrame(loop);
-
-                const container = document.getElementById("webcam-container");
-                container.innerHTML = "";
-                container.appendChild(webcam.canvas);
-                
-                labelContainer.innerHTML = "감지 중...";
-                labelContainer.className = "normal";
-
-            } catch (error) {
-                console.error("카메라 연결 실패:", error);
-                labelContainer.innerHTML = "🚨 웹캠을 불러올 수 없습니다. 권한이 차단되었거나 기기가 연결되지 않았습니다.";
-                labelContainer.className = "error";
-                document.getElementById("start-btn").style.display = "inline-block";
-            }
         }
 
-        // 반복 실행 프레임 루프
+        // 반복 실행 루프
         async function loop() {
-            if (webcam && webcam.canvas) {
-                webcam.update();
-                await predict();
-            }
-            animationFrameId = window.requestAnimationFrame(loop);
+            webcam.update(); // 웹캠 프레임 업데이트
+            await predict();
+            window.requestAnimationFrame(loop);
         }
 
-        // 학습된 모델 예측 및 비프음 트리거
-        async function predict() {
-            if (!model || !webcam || !webcam.canvas) return;
+        // 지연 처리를 위한 플래그 (소리가 너무 연속으로 나지 않게 방지)
+        let isPlaying = false; 
 
+        // 예측 및 판단
+        async function predict() {
             const prediction = await model.predict(webcam.canvas);
+            
+            // Teachable Machine에 등록된 클래스 이름을 확인하세요.
+            // 보통 첫 번째가 정상(Normal) 혹은 엎드림(Sleeping)일 것입니다.
+            // 아래는 확률이 가장 높은 클래스를 찾아내는 과정입니다.
             
             let highestClass = "";
             let highestProbability = 0;
@@ -197,21 +137,24 @@
                 }
             }
 
-            // 클래스명 유연한 체크 (자다, 졸음, sleep, 엎드림 등 포괄)
-            const isSleeping = highestClass.includes("자") || 
-                               highestClass.toLowerCase().includes("sleep") || 
-                               highestClass.includes("엎드");
-
-            if (isSleeping && highestProbability > 0.85) {
-                labelContainer.innerHTML = `🚨 엎드림 감지! (${(highestProbability * 100).toFixed(0)}%)`;
-                labelContainer.className = "sleeping";
+            // ⚠️ [주의] 모델의 정확한 클래스 명칭(레이블)으로 매칭해야 합니다.
+            // 만약 작동하지 않는다면 모델 학습 시 입력한 영어/한글 이름과 일치하는지 확인하세요.
+            // 여기서는 임의로 'Sleeping', '엎드림', '자는 상태' 등을 포괄하도록 설정했습니다.
+            if (highestClass.includes("자") || highestClass.toLowerCase().includes("sleep") || highestClass.includes("엎드")) {
                 
-                if (!isPlaying) {
-                    isPlaying = true;
-                    playAlertSound();
-                    setTimeout(() => { isPlaying = false; }, 2000); // 알람 간격 2초 딜레이
+                // 확률이 85% 이상일 때만 경고음 발생 (오작동 방지)
+                if (highestProbability > 0.85) {
+                    labelContainer.innerHTML = `🚨 엎드림 감지! (${(highestProbability * 100).toFixed(0)}%)`;
+                    labelContainer.className = "sleeping";
+                    
+                    if (!isPlaying) {
+                        isPlaying = true;
+                        playAlertSound();
+                        // 소리가 한 번 나면 2초간 쉬었다가 다시 감지 (귀 아픔 방지)
+                        setTimeout(() => { isPlaying = false; }, 2000); 
+                    }
                 }
-            } else if (!isSleeping) {
+            } else {
                 labelContainer.innerHTML = `✅ 정상 상태 (${(highestProbability * 100).toFixed(0)}%)`;
                 labelContainer.className = "normal";
             }
